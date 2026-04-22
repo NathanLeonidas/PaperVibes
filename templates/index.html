@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PaperVibes</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f1117; color: #e0e0e0; height: 100vh; display: flex; flex-direction: column; }
+  #topbar { display: flex; align-items: center; gap: 12px; padding: 12px 20px; background: #1a1b26; border-bottom: 1px solid #2a2b3a; }
+  #topbar h1 { font-size: 16px; color: #7aa2f7; white-space: nowrap; }
+  #search-box { flex: 1; display: flex; gap: 8px; }
+  #search-input { flex: 1; padding: 8px 12px; border-radius: 6px; border: 1px solid #3a3b4a; background: #24253a; color: #e0e0e0; font-size: 14px; outline: none; }
+  #search-input:focus { border-color: #7aa2f7; }
+  #search-btn { padding: 8px 16px; border-radius: 6px; border: none; background: #7aa2f7; color: #1a1b26; font-weight: 600; cursor: pointer; font-size: 14px; }
+  #search-btn:hover { background: #89b4fa; }
+  #search-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+  #main { flex: 1; display: flex; overflow: hidden; }
+  #sidebar { width: 360px; background: #1a1b26; border-right: 1px solid #2a2b3a; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+  #graph-container { flex: 1; position: relative; }
+  svg { width: 100%; height: 100%; }
+  .result-item, .paper-card { padding: 10px 12px; border-radius: 6px; background: #24253a; cursor: pointer; transition: background 0.15s; }
+  .result-item:hover, .paper-card:hover { background: #2a2d4a; }
+  .result-item.selected, .paper-card.selected { background: #2a2d4a; border-left: 3px solid #7aa2f7; }
+  .paper-title { font-size: 13px; font-weight: 600; color: #c0caf5; line-height: 1.4; }
+  .paper-meta { font-size: 11px; color: #787c99; margin-top: 4px; }
+  .paper-tag { display: inline-block; font-size: 10px; padding: 1px 6px; border-radius: 3px; margin-top: 4px; }
+  .tag-pdf { background: #9ece6a33; color: #9ece6a; }
+  .tag-seed { background: #ff9e6433; color: #ff9e64; }
+  .tag-d2 { background: #bb9af733; color: #bb9af7; }
+  #status { padding: 12px; font-size: 13px; color: #787c99; text-align: center; line-height: 1.6; }
+  .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid #3a3b4a; border-top-color: #7aa2f7; border-radius: 50%; animation: spin 0.6s linear infinite; vertical-align: middle; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .legend { position: absolute; bottom: 12px; left: 12px; font-size: 11px; color: #787c99; background: #1a1b26cc; padding: 8px 12px; border-radius: 6px; }
+  .legend span { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 4px; vertical-align: middle; }
+  #empty-state { display: flex; align-items: center; justify-content: center; height: 100%; color: #3a3b5a; font-size: 18px; }
+  #pdf-panel { display: none; position: absolute; bottom: 0; right: 0; width: 45%; height: 55%; background: #1a1b26; border-top: 1px solid #2a2b3a; border-left: 1px solid #2a2b3a; border-top-left-radius: 8px; z-index: 20; overflow: hidden; resize: both; direction: rtl; }
+  #pdf-panel > * { direction: ltr; }
+  #pdf-header { display: flex; align-items: center; justify-content: space-between; padding: 6px 12px; background: #24253a; border-bottom: 1px solid #2a2b3a; }
+  #pdf-header span { font-size: 12px; color: #c0caf5; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+  #pdf-close { background: none; border: none; color: #787c99; cursor: pointer; font-size: 16px; padding: 0 4px; margin-left: 8px; }
+  #pdf-close:hover { color: #e0e0e0; }
+  #pdf-iframe { width: 100%; height: calc(100% - 32px); border: none; background: #fff; }
+</style>
+</head>
+<body>
+<div id="topbar">
+  <h1>PaperVibes</h1>
+  <div id="search-box">
+    <input id="search-input" type="text" placeholder="Search for a paper..." autocomplete="off">
+    <button id="search-btn">Search</button>
+  </div>
+</div>
+<div id="main">
+  <div id="sidebar">
+    <div id="status">Search for a paper to get started.<br>Click a result to build its citation graph.</div>
+  </div>
+  <div id="graph-container">
+    <div id="empty-state">Search &amp; select a paper to visualize</div>
+    <svg id="graph" style="display:none"></svg>
+    <div id="pdf-panel">
+      <div id="pdf-header">
+        <span id="pdf-label">PDF Viewer</span>
+        <button id="pdf-close">&times;</button>
+      </div>
+      <iframe id="pdf-iframe"></iframe>
+    </div>
+    <div class="legend" style="display:none" id="legend">
+      <span style="background:#ff9e64"></span>Seed
+      <span style="background:#7aa2f7;margin-left:8px"></span>Depth 1
+      <span style="background:#bb9af7;margin-left:8px"></span>Depth 2
+    </div>
+  </div>
+</div>
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<script>
+const searchInput = document.getElementById('search-input');
+const searchBtn = document.getElementById('search-btn');
+const sidebar = document.getElementById('sidebar');
+const graphSvg = d3.select('#graph');
+const emptyState = document.getElementById('empty-state');
+const legend = document.getElementById('legend');
+const pdfPanel = document.getElementById('pdf-panel');
+const pdfIframe = document.getElementById('pdf-iframe');
+const pdfLabel = document.getElementById('pdf-label');
+let simulation;
+
+searchBtn.addEventListener('click', doSearch);
+searchInput.addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
+document.getElementById('pdf-close').addEventListener('click', () => { pdfPanel.style.display = 'none'; pdfIframe.src = ''; });
+
+async function doSearch() {
+  const q = searchInput.value.trim();
+  if (!q) return;
+  searchBtn.disabled = true;
+  sidebar.innerHTML = '<div id="status"><span class="spinner"></span> Searching...</div>';
+  try {
+    const r = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
+    const data = await r.json();
+    if (!data.results?.length) {
+      sidebar.innerHTML = '<div id="status">No results found. Try different keywords.</div>';
+      return;
+    }
+    sidebar.innerHTML = '';
+    data.results.forEach(p => {
+      const div = document.createElement('div');
+      div.className = 'result-item';
+      div.innerHTML = `<div class="paper-title">${esc(p.title)}</div>
+        <div class="paper-meta">${esc(p.snippet || '')}</div>
+        <span class="paper-tag tag-pdf">PDF</span>`;
+      div.addEventListener('click', () => doBuildGraph(p.title, p.pdf_url || p.url));
+      sidebar.appendChild(div);
+    });
+  } catch (e) {
+    sidebar.innerHTML = `<div id="status">Error: ${esc(e.message)}</div>`;
+  } finally {
+    searchBtn.disabled = false;
+  }
+}
+
+async function doBuildGraph(title, pdfUrl) {
+  sidebar.innerHTML = `<div id="status">
+    <span class="spinner"></span> Building graph...<br><br>
+    <strong>${esc(title)}</strong><br><br>
+    <small>Downloading PDFs &amp; extracting references.<br>
+    This may take 30&ndash;90 seconds.</small>
+  </div>`;
+  pdfPanel.style.display = 'none';
+
+  let url = `/api/graph?q=${encodeURIComponent(title)}`;
+  if (pdfUrl) url += `&pdf_url=${encodeURIComponent(pdfUrl)}`;
+
+  try {
+    const r = await fetch(url);
+    const data = await r.json();
+    if (data.error) {
+      sidebar.innerHTML = `<div id="status">${esc(data.error)}</div>`;
+      return;
+    }
+    renderGraph(data);
+    renderSidebar(data);
+  } catch (e) {
+    sidebar.innerHTML = `<div id="status">Error: ${esc(e.message)}</div>`;
+  }
+}
+
+function renderSidebar(data) {
+  sidebar.innerHTML = '';
+  const sorted = [...data.nodes].sort((a, b) => {
+    if (a.is_seed !== b.is_seed) return b.is_seed ? 1 : -1;
+    return (b.pagerank || 0) - (a.pagerank || 0);
+  });
+  sorted.forEach(n => {
+    const div = document.createElement('div');
+    let tag = '';
+    if (n.is_seed) tag = '<span class="paper-tag tag-seed">SEED</span>';
+    else if (n.depth === 1) tag = '<span class="paper-tag tag-pdf">depth 1</span>';
+    else tag = '<span class="paper-tag tag-d2">depth 2</span>';
+    const cites = n.cite_count ? ` &middot; cited by ${n.cite_count}` : '';
+    div.className = 'paper-card' + (n.is_seed ? ' selected' : '');
+    div.innerHTML = `<div class="paper-title">${esc(n.title)}</div>
+      <div class="paper-meta">${n.has_pdf ? 'PDF' : 'no PDF'}${cites}</div>
+      ${tag}`;
+    div.addEventListener('click', () => { highlightNode(n.id); if (n.url) openPdf(n.url, n.title); });
+    div.addEventListener('dblclick', () => doBuildGraph(n.title, null));
+    div.id = 'card-' + n.id;
+    sidebar.appendChild(div);
+  });
+}
+
+function renderGraph(data) {
+  graphSvg.selectAll('*').remove();
+  if (simulation) simulation.stop();
+  emptyState.style.display = 'none';
+  document.getElementById('graph').style.display = 'block';
+  legend.style.display = 'block';
+
+  const container = document.getElementById('graph-container');
+  const width = container.clientWidth;
+  const height = container.clientHeight;
+
+  const g = graphSvg.append('g');
+  graphSvg.call(d3.zoom().scaleExtent([0.2, 4]).on('zoom', e => g.attr('transform', e.transform)));
+
+  const maxW = Math.max(0.01, d3.max(data.edges, d => d.weight) || 0.01);
+
+  simulation = d3.forceSimulation(data.nodes)
+    .force('link', d3.forceLink(data.edges).id(d => d.id)
+      .distance(d => 180 * (1 - d.weight / maxW) + 50)
+      .strength(d => 0.3 + d.weight / maxW * 0.7))
+    .force('charge', d3.forceManyBody().strength(-250))
+    .force('center', d3.forceCenter(width / 2, height / 2))
+    .force('collision', d3.forceCollide().radius(20));
+
+  const link = g.append('g').selectAll('line')
+    .data(data.edges).join('line')
+    .attr('stroke', '#3a3b5a')
+    .attr('stroke-width', d => Math.max(0.5, (d.weight / maxW) * 4))
+    .attr('stroke-opacity', d => 0.15 + (d.weight / maxW) * 0.5);
+
+  const node = g.append('g').selectAll('g')
+    .data(data.nodes).join('g')
+    .call(d3.drag()
+      .on('start', (e, d) => { if (!e.active) simulation.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
+      .on('drag', (e, d) => { d.fx = e.x; d.fy = e.y; })
+      .on('end', (e, d) => { if (!e.active) simulation.alphaTarget(0); d.fx = null; d.fy = null; }));
+
+  const maxPR = Math.max(...data.nodes.map(d => d.pagerank || 0), 0.001);
+  function nodeRadius(d) {
+    const pr = (d.pagerank || 0) / maxPR;
+    return d.is_seed ? 14 + pr * 10 : 5 + pr * 18;
+  }
+
+  node.append('circle')
+    .attr('r', nodeRadius)
+    .attr('fill', d => d.is_seed ? '#ff9e64' : (d.depth === 1 ? '#7aa2f7' : '#bb9af7'))
+    .attr('stroke', d => d.is_seed ? '#ff9e64' : (d.depth === 1 ? '#7aa2f7' : '#bb9af7'))
+    .attr('stroke-width', d => d.is_seed ? 3 : 1.5)
+    .attr('opacity', d => d.is_seed ? 1 : (d.depth === 1 ? 0.9 : 0.7));
+
+  node.append('text')
+    .text(d => d.title.length > 35 ? d.title.slice(0, 33) + '...' : d.title)
+    .attr('dy', d => nodeRadius(d) + 14)
+    .attr('text-anchor', 'middle')
+    .attr('fill', '#787c99')
+    .attr('font-size', '9px')
+    .attr('pointer-events', 'none');
+
+  node.on('click', (e, d) => { highlightNode(d.id); if (d.url) openPdf(d.url, d.title); });
+  node.on('dblclick', (e, d) => { if (!d.is_seed) doBuildGraph(d.title, null); });
+
+  simulation.on('tick', () => {
+    link.attr('x1', d => d.source.x).attr('y1', d => d.source.y)
+        .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
+    node.attr('transform', d => `translate(${d.x},${d.y})`);
+  });
+}
+
+function highlightNode(id) {
+  document.querySelectorAll('.paper-card').forEach(el => el.classList.remove('selected'));
+  const card = document.getElementById('card-' + id);
+  if (card) { card.classList.add('selected'); card.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }
+
+  graphSvg.selectAll('circle').attr('opacity', d => d.id === id ? 1 : 0.3);
+  graphSvg.selectAll('line')
+    .attr('stroke-opacity', d => (d.source.id === id || d.target.id === id) ? 0.8 : 0.05);
+  setTimeout(() => {
+    graphSvg.selectAll('circle').attr('opacity', d => d.is_seed ? 1 : (d.depth === 1 ? 0.9 : 0.7));
+    graphSvg.selectAll('line').attr('stroke-opacity', d => 0.15 + d.weight * 0.5);
+  }, 2500);
+}
+
+function openPdf(url, title) {
+  pdfLabel.textContent = title || 'PDF Viewer';
+  pdfIframe.src = `/api/pdf?url=${encodeURIComponent(url)}`;
+  pdfPanel.style.display = 'block';
+}
+
+function esc(s) { const d = document.createElement('div'); d.textContent = s || ''; return d.innerHTML; }
+</script>
+</body>
+</html>
