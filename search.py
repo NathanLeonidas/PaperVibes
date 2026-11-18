@@ -1,5 +1,5 @@
 import re
-from urllib.parse import quote_plus, unquote
+import xml.etree.ElementTree as ET
 
 import httpx
 
@@ -18,50 +18,54 @@ def to_pdf_url(url: str) -> str | None:
 
 
 def web_search(query: str, max_results: int = 10, pdf_only: bool = False) -> list[dict]:
-    all_results = []
-    suffixes = ["filetype:pdf", "pdf"] if pdf_only else [""]
-
-    for suffix in suffixes:
-        q = f"{query} {suffix}".strip()
-        url = f"https://html.duckduckgo.com/html/?q={quote_plus(q)}"
-        try:
-            r = httpx.get(url, headers={"User-Agent": USER_AGENT}, timeout=15, follow_redirects=True)
-            r.raise_for_status()
-        except Exception:
-            continue
-
-        blocks = re.findall(
-            r'<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>(.*?)</a>.*?'
-            r'<a[^>]+class="result__snippet"[^>]*>(.*?)</a>',
-            r.text, re.DOTALL,
+    """Search arXiv for papers. Returns a list of dicts with keys
+    ``title``, ``href`` (abs url), ``pdf_url`` and ``body`` (abstract)."""
+    # Phrase-match the whole query across all arXiv fields.
+    search_query = f'all:"{query}"'
+    params = {
+        "search_query": search_query,
+        "start": 0,
+        "max_results": max_results,
+    }
+    try:
+        r = httpx.get(
+            "https://export.arxiv.org/api/query",
+            params=params,
+            headers={"User-Agent": USER_AGENT},
+            timeout=30,
         )
-        seen = {r["href"] for r in all_results}
-        for href, title_html, snippet_html in blocks:
-            href_match = re.search(r'uddg=([^&]+)', href)
-            actual_url = unquote(href_match.group(1)) if href_match else href
+        r.raise_for_status()
+    except Exception:
+        return []
 
-            pdf_url = to_pdf_url(actual_url)
-            if pdf_only and not pdf_url:
-                continue
+    root = ET.fromstring(r.text)
+    atom = "{http://www.w3.org/2005/Atom}"
+    entries = root.findall(f"{atom}entry")
 
-            deduped_url = pdf_url or actual_url
-            if deduped_url in seen:
-                continue
-            seen.add(deduped_url)
+    results: list[dict] = []
+    seen: set[str] = set()
+    for e in entries:
+        raw_id = (e.findtext(f"{atom}id") or "").strip()
+        # id is like http://arxiv.org/abs/2401.12345v7 -> strip trailing version
+        abs_url = re.sub(r"v\d+$", "", raw_id)
+        title = re.sub(r"\s+", " ", (e.findtext(f"{atom}title") or "")).strip()
+        summary = re.sub(r"\s+", " ", (e.findtext(f"{atom}summary") or "")).strip()
 
-            all_results.append({
-                "title": re.sub(r'<[^>]+>', '', title_html).strip(),
-                "href": actual_url,
-                "pdf_url": pdf_url,
-                "body": re.sub(r'<[^>]+>', '', snippet_html).strip(),
-            })
-            if len(all_results) >= max_results:
-                break
+        pdf_url = to_pdf_url(abs_url)
+        if pdf_only and not pdf_url:
+            continue
+        if abs_url in seen:
+            continue
+        seen.add(abs_url)
 
-        if len(all_results) >= max_results:
-            break
+        results.append({
+            "title": title,
+            "href": abs_url,
+            "pdf_url": pdf_url,
+            "body": summary,
+        })
 
-    return all_results
+    return results
 
 
 def download_pdf(url: str, timeout: int = 30) -> bytes | None:
