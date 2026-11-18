@@ -22,6 +22,23 @@ def _make_id(s: str) -> str:
     return hashlib.md5(s.lower().strip().encode()).hexdigest()[:12]
 
 
+def _paper_key(url: str) -> str:
+    """Canonical identity for a paper URL: arXiv id or DOI when recognizable, else the url.
+
+    Used to detect the seed paper's own self-reference (its arXiv id / DOI is often
+    embedded in its own PDF text and gets picked up as a link by the extractor).
+    """
+    if "arxiv.org" in url:
+        m = re.search(r'(\d{4}\.\d{4,5})', url)
+        if m:
+            return f"arxiv:{m.group(1)}"
+    if "doi.org" in url:
+        m = re.search(r'10\.\d{4,9}/[^\s,;}\]"\'<>]+', url)
+        if m:
+            return f"doi:{m.group(0).rstrip('.').lower()}"
+    return url.lower()
+
+
 def _resolve_title(url: str) -> str | None:
     try:
         with httpx.Client(timeout=15, follow_redirects=True) as client:
@@ -90,7 +107,10 @@ async def build_graph(query: str, pdf_url: str | None = None, max_refs: int = 20
     if not seed_links:
         return {"error": "No paper links found in the PDF."}
 
-    seed_links = [l for l in seed_links if _make_id(l) != seed_id][:max_refs]
+    # Drop links that point at the seed paper itself (its own arXiv id / DOI is
+    # often embedded in the PDF text and gets picked up as a self-reference).
+    self_key = _paper_key(pdf_url)
+    seed_links = [l for l in seed_links if _paper_key(l) != self_key][:max_refs]
 
     # url -> outgoing paper links
     links_map: dict[str, set[str]] = {pdf_url: set(seed_links)}
@@ -109,7 +129,7 @@ async def build_graph(query: str, pdf_url: str | None = None, max_refs: int = 20
     d2_counts: Counter = Counter()
     for _, links in d1_results:
         for link in links:
-            if link not in known_urls and _make_id(link) != seed_id:
+            if link not in known_urls and _paper_key(link) != self_key:
                 d2_counts[link] += 1
 
     d2_candidates = [url for url, count in d2_counts.most_common() if count >= 2][:max_refs]
